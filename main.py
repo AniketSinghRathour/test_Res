@@ -9,8 +9,9 @@ from transformers import AutoTokenizer, AutoModelForTokenClassification, pipelin
 import fitz  # PyMuPDF for PDF processing
 from docx import Document
 import re
+import gc  # Garbage Collector
 
-# Ensure the spaCy model is installed
+# Ensure spaCy model is installed and loaded only once
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
@@ -21,16 +22,16 @@ except OSError:
 nltk.download("punkt")
 nltk.download("stopwords")
 
-# Load Sentence Transformer model for embeddings
+# Load Sentence Transformer model for embeddings (global loading)
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Load Hugging Face's NER model (Replace with JobBERT if available)
+# Load Hugging Face's NER model (global loading)
 ner_model_name = "dslim/bert-base-NER"
 tokenizer = AutoTokenizer.from_pretrained(ner_model_name)
 ner_model = AutoModelForTokenClassification.from_pretrained(ner_model_name)
 ner_pipeline = pipeline("ner", model=ner_model, tokenizer=tokenizer)
 
-# Expanded Predefined Skills List
+# Predefined skills list
 PREDEFINED_SKILLS = set([
     "Python", "Java", "C++", "JavaScript", "SQL", "Machine Learning", "Deep Learning",
     "Artificial Intelligence", "Data Science", "NLP", "TensorFlow", "PyTorch", "Keras",
@@ -42,7 +43,7 @@ PREDEFINED_SKILLS = set([
     "Natural Language Processing", "Computer Vision", "MLOps", "ETL", "Data Engineering"
 ])
 
-# Extract text from files (PDF, DOCX, TXT)
+# Extract text from files (PDF, DOCX, TXT) efficiently
 def extract_text(file):
     ext = os.path.splitext(file.name)[-1].lower()
     text = ""
@@ -57,10 +58,13 @@ def extract_text(file):
     
     elif ext == ".txt":
         text = file.read().decode("utf-8")
+
+    del file  # Free memory
+    gc.collect()
     
     return text.strip()
 
-# Preprocess text
+# Preprocess text using spaCy
 def preprocess_text(text):
     doc = nlp(text.lower())
     tokens = [token.lemma_ for token in doc if token.is_alpha]
@@ -83,7 +87,7 @@ def extract_domain_terms(text):
     domain_terms = {entity["word"] for entity in entities if entity["entity"].startswith("B-")}
     return domain_terms
 
-# Compute weighted similarity
+# Compute weighted similarity between resume and job description
 def compute_weighted_similarity(resume_text, job_desc_text):
     resume_skills = extract_skills(resume_text) | extract_domain_terms(resume_text)
     job_skills = extract_skills(job_desc_text) | extract_domain_terms(job_desc_text)
@@ -92,36 +96,41 @@ def compute_weighted_similarity(resume_text, job_desc_text):
     embedding_similarity = cosine_similarity([model.encode(resume_text)], [model.encode(job_desc_text)])[0][0]
     
     weighted_score = (0.7 * embedding_similarity) + (0.3 * skill_match_score)
+
+    # Free memory
+    del resume_text, job_desc_text
+    gc.collect()
+
     return weighted_score, resume_skills, job_skills
 
 # Streamlit UI
 def main():
     st.title("📄 Resume-to-Job Matcher")
     st.write("Upload your resume and job description to check the match.")
-    
+
     resume_file = st.file_uploader("📤 Upload Resume (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"])
     job_file = st.file_uploader("📤 Upload Job Description (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"])
-    
+
     if resume_file and job_file:
         with st.spinner("Processing..."):
             resume_text = extract_text(resume_file)
             job_desc_text = extract_text(job_file)
-            
+
             if not resume_text or not job_desc_text:
                 st.error("⚠️ Could not extract text from the files. Try another format.")
                 return
-            
+
             similarity_score, resume_skills, job_skills = compute_weighted_similarity(resume_text, job_desc_text)
-        
+
         st.subheader("📊 Match Score")
         st.success(f"🔹 **{similarity_score:.2f}**")
-        
+
         st.subheader("📌 Extracted Skills from Resume")
         st.write(", ".join(resume_skills) if resume_skills else "⚠️ No skills detected.")
-        
+
         st.subheader("📎 Required Skills in Job Description")
         st.write(", ".join(job_skills) if job_skills else "⚠️ No skills detected.")
-        
+
         st.subheader("✅ Matching Skills")
         matching_skills = resume_skills.intersection(job_skills)
         st.write(", ".join(matching_skills) if matching_skills else "❌ No matching skills found.")
